@@ -6,8 +6,57 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import sqlite3
 import json
-from textblob import TextBlob
 import warnings
+import sys
+import os
+
+# Configuração de caminhos
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+try:
+    from database import DatabaseCogitara
+    from utils import IAGenerativa
+    DB_LOADED = True
+except ImportError as e:
+    st.error(f"❌ Erro ao carregar módulos: {e}")
+    DB_LOADED = False
+    
+    # Modo de emergência
+    class DatabaseCogitara:
+        def __init__(self, db_name="cogitara.db"):
+            self.db_name = db_name
+        def inserir_dados_exemplo(self):
+            st.success("✅ Dados de exemplo carregados (modo simulação)")
+            return True
+        def get_metricas_principais(self):
+            return {
+                'total_vendas': 150000, 
+                'num_vendas': 45,
+                'total_clientes': 245, 
+                'satisfacao_media': 4.2,
+                'investimento_marketing': 50000,
+                'conversoes_marketing': 120
+            }
+        def salvar_feedback(self, texto, tipo='geral', cliente_id=None, pontuacao=None):
+            return True
+        def get_analise_sentimento(self):
+            return pd.DataFrame({
+                'sentimento': ['positivo', 'neutro', 'negativo'],
+                'quantidade': [15, 8, 5],
+                'media_polaridade': [0.7, 0.1, -0.6]
+            })
+        def get_vendas_por_produto(self):
+            return pd.DataFrame({
+                'produto': ['Produto A', 'Produto B', 'Produto C'],
+                'total_vendas': [75000, 50000, 25000]
+            })
+    
+    class IAGenerativa:
+        def processar_pergunta(self, pergunta, dados):
+            return "🤖 Modo simulação ativado. Configure o banco de dados para respostas completas."
+
 warnings.filterwarnings('ignore')
 
 # Configuração da página
@@ -33,133 +82,86 @@ st.markdown("""
         border-radius: 10px;
         border-left: 4px solid #1E3A8A;
     }
+    .stAlert {
+        border-radius: 10px;
+    }
+    .chat-message {
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+    }
+    .chat-user {
+        background-color: #E3F2FD;
+        border-left: 4px solid #2196F3;
+    }
+    .chat-assistant {
+        background-color: #F3E5F5;
+        border-left: 4px solid #9C27B0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-class DatabaseCogitara:
-    def __init__(self, db_name="cogitara.db"):
-        self.db_name = db_name
-        self.init_database()
-    
-    def get_connection(self):
-        return sqlite3.connect(self.db_name)
-    
-    def init_database(self):
-        conn = self.get_connection()
-        
-        # Tabela de Vendas
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS vendas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                data DATE NOT NULL,
-                produto TEXT NOT NULL,
-                quantidade INTEGER NOT NULL,
-                valor_unitario DECIMAL(10,2) NOT NULL,
-                valor_total DECIMAL(10,2) NOT NULL,
-                regiao TEXT NOT NULL,
-                canal_venda TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Tabela de Feedbacks
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS feedbacks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                texto TEXT NOT NULL,
-                tipo TEXT NOT NULL,
-                pontuacao INTEGER,
-                sentimento TEXT,
-                polaridade DECIMAL(3,2),
-                data_feedback DATE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-
-    def inserir_dados_exemplo(self):
-        conn = self.get_connection()
-        
-        # Inserir vendas exemplo
-        produtos = ['Produto A', 'Produto B', 'Produto C']
-        regioes = ['Sudeste', 'Nordeste', 'Sul']
-        
-        data_inicio = datetime(2023, 1, 1)
-        for i in range(100):
-            data = data_inicio + timedelta(days=i)
-            produto = produtos[i % len(produtos)]
-            quantidade = (i % 10) + 1
-            valor_unitario = 50 + (i % 3) * 25
-            valor_total = quantidade * valor_unitario
-            regiao = regioes[i % len(regioes)]
-            canal = 'E-commerce' if i % 2 == 0 else 'Loja Física'
-            
-            conn.execute('''
-                INSERT INTO vendas (data, produto, quantidade, valor_unitario, valor_total, regiao, canal_venda)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (data.date(), produto, quantidade, valor_unitario, valor_total, regiao, canal))
-        
-        # Inserir feedbacks exemplo
-        feedbacks = [
-            ('Produto excelente, entrega rápida!', 'produto', 5, 'positivo', 0.8, '2024-01-15'),
-            ('Demorou muito para chegar', 'entrega', 2, 'negativo', -0.6, '2024-01-16'),
-            ('Atendimento muito bom!', 'atendimento', 4, 'positivo', 0.7, '2024-01-17'),
-        ]
-        
-        for feedback in feedbacks:
-            conn.execute('''
-                INSERT INTO feedbacks (texto, tipo, pontuacao, sentimento, polaridade, data_feedback)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', feedback)
-        
-        conn.commit()
-        conn.close()
-
 class CogitaraApp:
     def __init__(self):
-        self.db = DatabaseCogitara()
+        if DB_LOADED:
+            self.db = DatabaseCogitara()
+        else:
+            self.db = DatabaseCogitara()
         
+        self.ia = IAGenerativa()
+    
     def dashboard_principal(self):
         st.markdown('<h1 class="main-header">🚀 COGITARA IA</h1>', unsafe_allow_html=True)
         st.markdown("**Do dado à decisão, com visão e precisão**")
+        
+        # Carregar métricas
+        metricas = self.db.get_metricas_principais()
         
         # Métricas
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("📊 Vendas Totais", "R$ 150.000", "+12%")
+            st.metric("📊 Vendas (30 dias)", f"R$ {metricas['total_vendas']:,.0f}",
+                     delta=f"{metricas['num_vendas']} vendas")
+        
         with col2:
-            st.metric("😊 Satisfação", "4.2/5.0", "+0.3")
+            st.metric("👥 Clientes Ativos", f"{metricas['total_clientes']}",
+                     delta="5 novos")
+        
         with col3:
-            st.metric("👥 Clientes", "245", "+8%")
+            st.metric("😊 Satisfação Média", f"{metricas['satisfacao_media']:.1f}/5.0",
+                     delta="0.2")
+        
         with col4:
-            st.metric("🎯 Eficiência", "87%", "+5%")
+            st.metric("📢 Marketing", f"R$ {metricas['investimento_marketing']:,.0f}",
+                     delta=f"{metricas['conversoes_marketing']} conversões")
         
         # Gráficos
         col1, col2 = st.columns(2)
         
         with col1:
-            # Gráfico de vendas simulado
-            datas = pd.date_range(start='2024-01-01', end='2024-01-31', freq='D')
-            vendas = np.random.normal(5000, 1000, len(datas)).cumsum()
-            df_vendas = pd.DataFrame({'Data': datas, 'Vendas': vendas})
-            
-            fig = px.line(df_vendas, x='Data', y='Vendas', title='📈 Tendência de Vendas')
+            # Gráfico de vendas por produto
+            vendas_produto = self.db.get_vendas_por_produto()
+            fig = px.bar(vendas_produto, x='produto', y='total_vendas', 
+                        title='📦 Vendas por Produto', color='produto')
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # Gráfico de produtos
-            produtos = ['Produto A', 'Produto B', 'Produto C']
-            vendas_prod = [45000, 35000, 25000]
-            df_prod = pd.DataFrame({'Produto': produtos, 'Vendas': vendas_prod})
-            
-            fig = px.pie(df_prod, values='Vendas', names='Produto', title='📦 Vendas por Produto')
+            # Gráfico de sentimentos
+            sentimentos = self.db.get_analise_sentimento()
+            fig = px.pie(sentimentos, values='quantidade', names='sentimento',
+                        title='😊 Análise de Sentimento dos Clientes')
             st.plotly_chart(fig, use_container_width=True)
+        
+        # Status do sistema
+        if not DB_LOADED:
+            st.warning("🔧 Sistema em modo simulação - Algumas funcionalidades podem estar limitadas")
 
     def analise_preditiva(self):
         st.header("🔮 Análise Preditiva")
+        
+        if not DB_LOADED:
+            st.info("📊 Modo demonstração - Conecte o banco de dados para análise completa")
         
         # Simulação de previsão
         meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun']
@@ -173,7 +175,7 @@ class CogitaraApp:
         fig.update_layout(title='Previsão de Vendas - Próximos 6 Meses')
         st.plotly_chart(fig)
         
-        # Métricas de previsão
+        # Métricas
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Crescimento Esperado", "15%")
@@ -183,7 +185,7 @@ class CogitaraApp:
             st.metric("Melhor Produto", "Produto A")
 
     def simulador_cenarios(self):
-        st.header("🎯 Simulador de Cenários")
+        st.header("🎯 Simulador de Cenários 'E se...?'")
         
         col1, col2 = st.columns(2)
         
@@ -211,10 +213,13 @@ class CogitaraApp:
     def analise_sentimento(self):
         st.header("😊 Análise de Sentimento")
         
-        # Análise de texto
-        feedback = st.text_area("Digite o feedback do cliente:")
+        from textblob import TextBlob
         
-        if st.button("Analisar Sentimento") and feedback:
+        # Análise de texto
+        feedback = st.text_area("Digite o feedback do cliente:", 
+                               "Produto excelente, entrega rápida e atendimento perfeito!")
+        
+        if st.button("Analisar Sentimento"):
             analysis = TextBlob(feedback)
             polaridade = analysis.sentiment.polarity
             
@@ -236,34 +241,128 @@ class CogitaraApp:
             with col3:
                 st.metric("Confiança", f"{(abs(polaridade)*100):.0f}%")
             
-            # Recomendações
-            if polaridade < 0:
-                st.error("**🔍 Ação Recomendada:** Investigar causas e contatar o cliente.")
-            else:
-                st.success("**✅ Status:** Cliente satisfeito - manter qualidade.")
+            # Salvar no banco se disponível
+            if DB_LOADED:
+                try:
+                    self.db.salvar_feedback(feedback, 'geral')
+                    st.success("✅ Feedback salvo no banco de dados!")
+                except:
+                    st.info("💾 Banco de dados não disponível para salvar")
+        
+        # Análise consolidada
+        st.subheader("📊 Análise Consolidada")
+        sentimentos = self.db.get_analise_sentimento()
+        
+        if not sentimentos.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = px.pie(sentimentos, values='quantidade', names='sentimento',
+                            title='Distribuição de Sentimentos')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                fig = px.bar(sentimentos, x='sentimento', y='media_polaridade',
+                            title='Intensidade Média dos Sentimentos')
+                st.plotly_chart(fig, use_container_width=True)
+
+    def modulo_chat_ia(self):
+        st.header("💬 Assistente COGITARA IA")
+        st.markdown("**Converse comigo e eu analisarei seus dados em tempo real!**")
+        
+        # Inicializar session state para chat
+        if 'mensagens' not in st.session_state:
+            st.session_state.mensagens = []
+        
+        # Exibir histórico do chat
+        for mensagem in st.session_state.mensagens:
+            with st.chat_message(mensagem["role"]):
+                st.markdown(mensagem["content"])
+        
+        # Input do usuário
+        if prompt := st.chat_input("Pergunte sobre vendas, clientes, marketing..."):
+            # Adicionar mensagem do usuário
+            st.session_state.mensagens.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            
+            # Gerar resposta da IA
+            with st.chat_message("assistant"):
+                with st.spinner("🤖 Analisando dados e gerando insights..."):
+                    # Carregar dados contextuais
+                    metricas = self.db.get_metricas_principais()
+                    
+                    # Processar pergunta
+                    resposta = self.ia.processar_pergunta(prompt, metricas)
+                    
+                    # Exibir resposta
+                    st.markdown(resposta)
+            
+            # Adicionar resposta ao histórico
+            st.session_state.mensagens.append({"role": "assistant", "content": resposta})
+        
+        # Sidebar com exemplos de perguntas
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("💡 Exemplos para perguntar:")
+        
+        exemplos = [
+            "Como estão minhas vendas?",
+            "Qual é o melhor produto?",
+            "Previsão para os próximos meses",
+            "Como melhorar o marketing?",
+            "Problemas com clientes",
+            "Sugestões para crescer"
+        ]
+        
+        for exemplo in exemplos:
+            if st.sidebar.button(f"\"{exemplo}\"", key=exemplo):
+                # Simular input do usuário
+                st.session_state.mensagens.append({"role": "user", "content": exemplo})
+                with st.chat_message("user"):
+                    st.markdown(exemplo)
+                
+                # Gerar resposta
+                with st.chat_message("assistant"):
+                    with st.spinner("🤖 Analisando..."):
+                        metricas = self.db.get_metricas_principais()
+                        resposta = self.ia.processar_pergunta(exemplo, metricas)
+                        st.markdown(resposta)
+                
+                st.session_state.mensagens.append({"role": "assistant", "content": resposta})
+                st.rerun()
+        
+        # Botão para limpar histórico
+        if st.sidebar.button("🗑️ Limpar Conversa"):
+            st.session_state.mensagens = []
+            self.ia.limpar_historico()
+            st.rerun()
 
     def run(self):
         # Sidebar
-        st.sidebar.image("https://via.placeholder.com/150x50/1E3A8A/FFFFFF?text=COGITARA", use_column_width=True)
-        st.sidebar.title("Navegação")
+        st.sidebar.title("🎛️ Painel COGITARA")
+        st.sidebar.markdown("---")
         
         pagina = st.sidebar.selectbox(
             "Selecione a página:",
-            ["🏠 Dashboard", "🔮 Análise Preditiva", "🎯 Simulador", "😊 Análise de Sentimento"]
+            ["🏠 Dashboard", "🔮 Análise Preditiva", "🎯 Simulador", "😊 Análise de Sentimento", "💬 Chat IA"]
         )
         
         st.sidebar.markdown("---")
-        st.sidebar.info("""
-        **COGITARA IA**
-        - Análise Preditiva
-        - Simulador de Cenários  
-        - Análise de Sentimento
-        - Dashboard em Tempo Real
-        """)
         
-        if st.sidebar.button("🔄 Carregar Dados Exemplo"):
+        if DB_LOADED and st.sidebar.button("🔄 Carregar Dados Exemplo"):
             self.db.inserir_dados_exemplo()
             st.sidebar.success("Dados carregados!")
+        elif not DB_LOADED:
+            st.sidebar.warning("⚡ Modo Demonstração")
+        
+        st.sidebar.info("""
+        **COGITARA IA**
+        - 🔮 Análise Preditiva
+        - 🎯 Simulador de Cenários  
+        - 😊 Análise de Sentimento
+        - 💬 Chat com IA
+        - 📊 Dashboard em Tempo Real
+        """)
         
         # Navegação
         if pagina == "🏠 Dashboard":
@@ -274,6 +373,8 @@ class CogitaraApp:
             self.simulador_cenarios()
         elif pagina == "😊 Análise de Sentimento":
             self.analise_sentimento()
+        elif pagina == "💬 Chat IA":
+            self.modulo_chat_ia()
 
 # Executar app
 if __name__ == "__main__":
