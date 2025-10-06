@@ -1,268 +1,248 @@
-import pandas as pd
-import numpy as np
+import os
+import logging
+import hashlib
+import json
+import time
 import re
 from datetime import datetime, timedelta
-import random
-from textblob import TextBlob
+from typing import Dict, Any, List, Optional, Tuple, Union
+from collections import defaultdict, Counter
+import statistics
+import math
+from functools import wraps
+from dataclasses import dataclass
+from enum import Enum
+import threading
+from contextlib import contextmanager
 
-class IAGenerativa:
-    def __init__(self):
-        self.historico_conversa = []
-        self.padroes_negocio = self._carregar_padroes()
+logger = logging.getLogger(__name__)
+
+class SecurityLevel(Enum):
+    LOW = "low"
+    MEDIUM = "medium" 
+    HIGH = "high"
+    CRITICAL = "critical"
+
+@dataclass
+class AnalysisResult:
+    """Comprehensive analysis result container"""
+    success: bool
+    data: Dict[str, Any]
+    metrics: Dict[str, float]
+    warnings: List[str]
+    recommendations: List[str]
+    processing_time: float
+
+class AdvancedUtils:
+    """Advanced utility functions for various operations"""
     
-    def _carregar_padroes(self):
-        """Padrões de negócio para IA generativa"""
-        return {
-            'sazonais': {
-                'verao': ['sorvete', 'bebidas geladas', 'protetor solar', 'roupas leves'],
-                'inverno': ['casacos', 'sopas', 'cobertores', 'bebidas quentes'],
-                'natal': ['presentes', 'decoração', 'panetone', 'peru'],
-                'black_friday': ['eletrônicos', 'roupas', 'cosméticos', 'celulares']
-            },
-            'tendencias': {
-                'crescimento': ['sustentável', 'eco-friendly', 'tecnologia', 'saúde'],
-                'comportamento': ['trabalho remoto', 'delivery', 'streaming', 'e-commerce']
+    @staticmethod
+    def generate_hash(data: str, algorithm: str = 'sha256') -> str:
+        """Generate hash for given data"""
+        hash_func = getattr(hashlib, algorithm, hashlib.sha256)
+        return hash_func(data.encode()).hexdigest()
+    
+    @staticmethod
+    def validate_email(email: str) -> bool:
+        """Comprehensive email validation"""
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return bool(re.match(pattern, email))
+    
+    @staticmethod
+    def validate_phone(phone: str) -> bool:
+        """International phone number validation"""
+        pattern = r'^\+?[1-9]\d{1,14}$'
+        return bool(re.match(pattern, phone))
+    
+    @staticmethod
+    def format_file_size(size_bytes: int) -> str:
+        """Format file size in human-readable format"""
+        if size_bytes == 0:
+            return "0 B"
+        
+        size_names = ["B", "KB", "MB", "GB", "TB"]
+        i = int(math.floor(math.log(size_bytes, 1024)))
+        p = math.pow(1024, i)
+        s = round(size_bytes / p, 2)
+        return f"{s} {size_names[i]}"
+    
+    @staticmethod
+    def get_system_uptime() -> str:
+        """Get system uptime information"""
+        try:
+            with open('/proc/uptime', 'r') as f:
+                uptime_seconds = float(f.readline().split()[0])
+                return str(timedelta(seconds=uptime_seconds))
+        except:
+            return "Unknown"
+    
+    @staticmethod
+    def get_memory_usage() -> Dict[str, Any]:
+        """Get system memory usage"""
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            return {
+                'total': AdvancedUtils.format_file_size(memory.total),
+                'available': AdvancedUtils.format_file_size(memory.available),
+                'used': AdvancedUtils.format_file_size(memory.used),
+                'percentage': memory.percent
             }
-        }
+        except ImportError:
+            return {'error': 'psutil not available'}
     
-    def processar_pergunta(self, pergunta_usuario, dados_contexto=None):
-        """Processa a pergunta do usuário e gera resposta inteligente"""
-        
-        # Analisar a pergunta
-        pergunta_analisada = self._analisar_pergunta(pergunta_usuario)
-        
-        # Gerar resposta baseada no contexto
-        resposta = self._gerar_resposta_inteligente(pergunta_analisada, dados_contexto)
-        
-        # Salvar no histórico
-        self.historico_conversa.append({
-            'timestamp': datetime.now(),
-            'pergunta': pergunta_usuario,
-            'resposta': resposta,
-            'tipo': pergunta_analisada['tipo']
-        })
-        
-        return resposta
+    @staticmethod
+    def get_cpu_usage() -> Dict[str, Any]:
+        """Get CPU usage information"""
+        try:
+            import psutil
+            return {
+                'percent': psutil.cpu_percent(interval=1),
+                'cores': psutil.cpu_count(),
+                'load_average': os.getloadavg() if hasattr(os, 'getloadavg') else []
+            }
+        except ImportError:
+            return {'error': 'psutil not available'}
     
-    def _analisar_pergunta(self, pergunta):
-        """Analisa a pergunta para entender a intenção"""
-        pergunta_lower = pergunta.lower()
-        
-        # Padrões de reconhecimento
-        padroes = {
-            'vendas': r'(venda|vendas|faturamento|receita|vender|vendeu)',
-            'clientes': r'(cliente|clientes|satisfação|fidelidade|retenção)',
-            'marketing': r'(marketing|propaganda|campanha|anúncio|investimento)',
-            'produto': r'(produto|produtos|estoque|inventário|catálogo)',
-            'previsao': r'(previsão|prever|futuro|próximo|tendência)',
-            'performance': r'(performance|desempenho|resultado|métrica|indicador)',
-            'problema': r'(problema|erro|issue|bug|não funciona|difícil)',
-            'sugestao': r'(sugestão|ideia|recomendação|melhorar|otimizar)'
-        }
-        
-        tipo_pergunta = 'geral'
-        for tipo, padrao in padroes.items():
-            if re.search(padrao, pergunta_lower):
-                tipo_pergunta = tipo
-                break
-        
+    @staticmethod
+    def get_performance_metrics() -> Dict[str, Any]:
+        """Get comprehensive performance metrics"""
         return {
-            'texto': pergunta,
-            'tipo': tipo_pergunta,
-            'sentimento': TextBlob(pergunta).sentiment.polarity
+            'timestamp': datetime.now().isoformat(),
+            'memory': AdvancedUtils.get_memory_usage(),
+            'cpu': AdvancedUtils.get_cpu_usage(),
+            'uptime': AdvancedUtils.get_system_uptime(),
+            'active_threads': threading.active_count(),
+            'python_version': os.sys.version
         }
     
-    def _gerar_resposta_inteligente(self, pergunta_analisada, dados_contexto):
-        """Gera resposta contextual baseada na pergunta"""
+    @staticmethod
+    def compress_data(data: str) -> bytes:
+        """Compress string data"""
+        import zlib
+        return zlib.compress(data.encode())
+    
+    @staticmethod
+    def decompress_data(compressed_data: bytes) -> str:
+        """Decompress data to string"""
+        import zlib
+        return zlib.decompress(compressed_data).decode()
+    
+    @staticmethod
+    def create_backup(file_path: str, backup_dir: str = "backups") -> str:
+        """Create backup of a file with timestamp"""
+        os.makedirs(backup_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = os.path.join(
+            backup_dir, 
+            f"{os.path.basename(file_path)}_{timestamp}.bak"
+        )
         
-        tipo = pergunta_analisada['tipo']
-        pergunta_texto = pergunta_analisada['texto']
+        import shutil
+        shutil.copy2(file_path, backup_file)
+        return backup_file
+
+class SecurityManager:
+    """Advanced security management with threat detection"""
+    
+    def __init__(self):
+        self.failed_attempts = defaultdict(list)
+        self.blocked_ips = set()
+        self.suspicious_patterns = [
+            r".*(\bselect\b|\binsert\b|\bupdate\b|\bdelete\b|\bdrop\b).*",
+            r".*(<script>|javascript:).*",
+            r".*(\.\./|\.\.\\).*",
+            r".*(union.*select).*",
+        ]
+    
+    def is_valid_username(self, username: str) -> bool:
+        """Validate username against security rules"""
+        if len(username) < 3 or len(username) > 50:
+            return False
         
-        if tipo == 'vendas':
-            return self._gerar_resposta_vendas(pergunta_texto, dados_contexto)
-        elif tipo == 'clientes':
-            return self._gerar_resposta_clientes(pergunta_texto, dados_contexto)
-        elif tipo == 'marketing':
-            return self._gerar_resposta_marketing(pergunta_texto, dados_contexto)
-        elif tipo == 'previsao':
-            return self._gerar_resposta_previsao(pergunta_texto, dados_contexto)
-        elif tipo == 'problema':
-            return self._gerar_resposta_problema(pergunta_texto, dados_contexto)
-        elif tipo == 'sugestao':
-            return self._gerar_resposta_sugestao(pergunta_texto, dados_contexto)
-        else:
-            return self._gerar_resposta_geral(pergunta_texto, dados_contexto)
+        # Only allow alphanumeric and some special characters
+        if not re.match(r'^[a-zA-Z0-9_.-]+$', username):
+            return False
+        
+        # Prevent common vulnerable usernames
+        blocked_usernames = ['admin', 'root', 'system', 'administrator']
+        if username.lower() in blocked_usernames:
+            return False
+        
+        return True
     
-    def _gerar_resposta_vendas(self, pergunta, dados):
-        """Respostas sobre vendas"""
-        respostas = [
-            f"📊 **Análise de Vendas**: Baseado nos dados atuais, suas vendas estão com tendência de crescimento de 12%.\n\n"
-            f"**Produto em Destaque**: Produto A lidera com 45% do faturamento\n"
-            f"**Recomendação**: Considere aumentar estoque do Produto A e criar promoções cruzadas",
-            
-            f"💰 **Performance Financeira**: Faturamento atual: R$ {dados.get('total_vendas', 150000):,.0f} (últimos 30 dias)\n\n"
-            f"**Crescimento**: 15% vs período anterior\n"
-            f"**Meta**: 92% da meta mensal atingida\n"
-            f"**Ação Sugerida**: Focar em upsell com clientes existentes",
-            
-            f"🎯 **Estratégia de Vendas**: Identifiquei oportunidades importantes:\n\n"
-            f"• **Região Sul**: Crescimento de 25% - merece mais investimento\n"
-            f"• **E-commerce**: Conversão 3x maior que loja física\n"
-            f"• **Sugestão**: Expanda campanhas digitais para outras regiões"
+    def is_valid_email(self, email: str) -> bool:
+        """Enhanced email validation"""
+        return AdvancedUtils.validate_email(email)
+    
+    def is_strong_password(self, password: str) -> bool:
+        """Check password strength"""
+        if len(password) < 8:
+            return False
+        
+        checks = [
+            any(c.islower() for c in password),  # lowercase
+            any(c.isupper() for c in password),  # uppercase  
+            any(c.isdigit() for c in password),  # digit
+            any(not c.isalnum() for c in password)  # special char
         ]
-        return random.choice(respostas)
+        
+        return all(checks)
     
-    def _gerar_resposta_clientes(self, pergunta, dados):
-        """Respostas sobre clientes"""
-        respostas = [
-            f"😊 **Satisfação do Cliente**: NPS atual: 65 (Considerado Excelente)\n\n"
-            f"**Pontos Fortes**:\n"
-            f"• Atendimento ao cliente: 4.8/5.0\n"
-            f"• Qualidade do produto: 4.6/5.0\n\n"
-            f"**Oportunidade**: Melhorar tempo de entrega (atual: 3.9/5.0)",
-            
-            f"👥 **Base de Clientes**: Atualmente {dados.get('total_clientes', 245)} clientes ativos\n\n"
-            f"**Crescimento**: +15 novos clientes este mês\n"
-            f"**Taxa de Retenção**: 88% (acima da média do setor)\n"
-            f"**Sugestão**: Programa de fidelidade pode aumentar retenção para 92%",
-            
-            f"📈 **Comportamento do Cliente**: Insights importantes:\n\n"
-            f"• **Clientes Recorrentes**: Gastam 3x mais que novos clientes\n"
-            f"• **Perfil Ideal**: Empresas de 10-50 funcionários\n"
-            f"• **Sazonalidade**: Pico de compras às quartas-feiras"
+    def detect_sql_injection(self, input_string: str) -> bool:
+        """Detect potential SQL injection attempts"""
+        input_lower = input_string.lower()
+        for pattern in self.suspicious_patterns:
+            if re.match(pattern, input_lower, re.IGNORECASE):
+                return True
+        return False
+    
+    def detect_xss(self, input_string: str) -> bool:
+        """Detect potential XSS attempts"""
+        xss_patterns = [
+            r'<script.*?>.*?</script>',
+            r'javascript:',
+            r'on\w+\s*=',
+            r'<iframe.*?>',
+            r'<object.*?>'
         ]
-        return random.choice(respostas)
+        
+        for pattern in xss_patterns:
+            if re.search(pattern, input_string, re.IGNORECASE):
+                return True
+        return False
     
-    def _gerar_resposta_marketing(self, pergunta, dados):
-        """Respostas sobre marketing"""
-        respostas = [
-            f"📢 **Performance de Marketing**: ROI atual: 3.2 (Cada R$1 investido retorna R$3.20)\n\n"
-            f"**Canais Mais Eficientes**:\n"
-            f"• Google Ads: ROI 4.1\n"
-            f"• Email Marketing: ROI 5.8\n"
-            f"• Redes Sociais: ROI 2.3\n\n"
-            f"**Recomendação**: Aumente orçamento em Email Marketing",
-            
-            f"🎯 **Estratégia de Marketing**: Análise de campanhas:\n\n"
-            f"**Campanha Top**: 'Black Friday' - Conversão 12%\n"
-            f"**Oportunidade**: Segmentação por idade pode aumentar conversão em 25%\n"
-            f"**Alerta**: Investimento em TV com ROI baixo (1.8) - reconsiderar",
-            
-            f"💡 **Inovação em Marketing**: Tendências identificadas:\n\n"
-            f"• **Marketing Conteúdo**: Gera 3x mais leads qualificados\n"
-            f"• **Personalização**: Aumenta conversão em 35%\n"
-            f"• **Video Marketing**: Engajamento 5x maior que texto\n"
-            f"**Sugestão**: Implementar programa de influenciadores"
+    def record_failed_attempt(self, ip_address: str, max_attempts: int = 5, 
+                            window_minutes: int = 15):
+        """Record failed login attempt and block if threshold exceeded"""
+        now = datetime.now()
+        self.failed_attempts[ip_address].append(now)
+        
+        # Remove attempts outside the time window
+        cutoff = now - timedelta(minutes=window_minutes)
+        self.failed_attempts[ip_address] = [
+            attempt for attempt in self.failed_attempts[ip_address] 
+            if attempt > cutoff
         ]
-        return random.choice(respostas)
+        
+        # Block IP if too many attempts
+        if len(self.failed_attempts[ip_address]) >= max_attempts:
+            self.blocked_ips.add(ip_address)
+            logger.warning(f"IP address blocked: {ip_address}")
     
-    def _gerar_resposta_previsao(self, pergunta, dados):
-        """Respostas sobre previsões"""
-        respostas = [
-            f"🔮 **Previsão de Vendas**: Próximos 3 meses:\n\n"
-            f"• **Mês 1**: R$ {dados.get('total_vendas', 150000) * 1.1:,.0f} (+10%)\n"
-            f"• **Mês 2**: R$ {dados.get('total_vendas', 150000) * 1.18:,.0f} (+8%)\n"
-            f"• **Mês 3**: R$ {dados.get('total_vendas', 150000) * 1.25:,.0f} (+7%)\n\n"
-            f"**Confiança**: 87% - Baseado em dados históricos e sazonalidade\n"
-            f"**Fator Crítico**: Manter investimento em marketing atual",
-            
-            f"📈 **Tendências do Mercado**: Previsões estratégicas:\n\n"
-            f"• **Crescimento Setor**: 12% ano que vem\n"
-            f"• **Nova Oportunidade**: Mercado B2B em expansão\n"
-            f"• **Ameaça**: Concorrência aumentando preços\n\n"
-            f"**Recomendação**: Diferencie-se com serviço pós-venda",
-            
-            f"🎯 **Previsão com Cenários**:\n\n"
-            f"**Cenário Otimista** (30% probabilidade): +20% crescimento\n"
-            f"**Cenário Base** (50% probabilidade): +12% crescimento  \n"
-            f"**Cenário Conservador** (20% probabilidade): +5% crescimento\n\n"
-            f"**Preparação**: Mantenha reserva para cenário conservador"
-        ]
-        return random.choice(respostas)
+    def is_ip_blocked(self, ip_address: str) -> bool:
+        """Check if IP address is currently blocked"""
+        if ip_address in self.blocked_ips:
+            # Check if block should be lifted (1 hour block)
+            block_time = min(self.failed_attempts[ip_address])
+            if datetime.now() - block_time > timedelta(hours=1):
+                self.blocked_ips.remove(ip_address)
+                self.failed_attempts[ip_address].clear()
+                return False
+            return True
+        return False
     
-    def _gerar_resposta_problema(self, pergunta, dados):
-        """Respostas para problemas"""
-        respostas = [
-            f"🔧 **Análise do Problema**: Identifiquei possíveis causas:\n\n"
-            f"• **Problema de Processo**: Falha no fluxo de aprovação\n"
-            f"• **Recurso Humano**: Capacitação necessária na equipe\n"
-            f"• **Tecnologia**: Sistema lento afetando produtividade\n\n"
-            f"**Solução Imediata**: Otimizar processo de aprovação\n"
-            f"**Solução Longo Prazo**: Treinamento da equipe",
-            
-            f"⚠️ **Diagnóstico de Issue**: Recomendações:\n\n"
-            f"1. **Prioridade Alta**: Resolver gargalos no atendimento\n"
-            f"2. **Prioridade Média**: Melhorar documentação\n"
-            f"3. **Prioridade Baixa**: Atualizar interface\n\n"
-            f"**Tempo Estimado**: 2-3 semanas para resolução completa",
-            
-            f"💡 **Solução de Problemas**: Abordagem sugerida:\n\n"
-            f"• **Análise Raiz**: Coletar dados por 7 dias\n"
-            f"• **Teste A/B**: Implementar duas soluções\n"
-            f"• **Métrica**: Medir impacto em tempo real\n"
-            f"• **Escala**: Aplicar solução vencedora"
-        ]
-        return random.choice(respostas)
-    
-    def _gerar_resposta_sugestao(self, pergunta, dados):
-        """Respostas para sugestões"""
-        respostas = [
-            f"💡 **Sugestões Estratégicas**: Baseado na análise:\n\n"
-            f"🎯 **Alta Impacto**:\n"
-            f"• Implementar programa de fidelidade\n"
-            f"• Otimizar funil de vendas\n\n"
-            f"📊 **Médio Impacto**:\n"
-            f"• Segmentar campanhas por persona\n"
-            f"• Melhorar pós-venda\n\n"
-            f"⚡ **Rápida Implementação**:\n"
-            f"• Automatizar relatórios\n"
-            f"• Template de email marketing",
-            
-            f"🚀 **Ideias Inovadoras**: Para crescimento acelerado:\n\n"
-            f"**Produto**:\n"
-            f"• Nova linha premium (+25% margem)\n"
-            f"• Assinatura mensal (receita recorrente)\n\n"
-            f"**Marketing**:\n"
-            f"• Parceria com influenciadores\n"
-            f"• Conteúdo educativo no YouTube\n\n"
-            f"**Vendas**:\n"
-            f"• Programa de indicações\n"
-            f"• Upsell estratégico"
-        ]
-        return random.choice(respostas)
-    
-    def _gerar_resposta_geral(self, pergunta, dados):
-        """Resposta geral para perguntas não específicas"""
-        respostas = [
-            f"🤖 **COGITARA IA**: Olá! Analisei sua pergunta e aqui estão insights relevantes:\n\n"
-            f"📊 **Destaques Atuais**:\n"
-            f"• Vendas: R$ {dados.get('total_vendas', 150000):,.0f} (Crescimento de 12%)\n"
-            f"• Clientes: {dados.get('total_clientes', 245)} ativos (88% retenção)\n"
-            f"• Marketing: ROI de 3.2\n\n"
-            f"💡 **Recomendações**:\n"
-            f"• Focar em clientes existentes para aumentar LTV\n"
-            f"• Expandir campanhas digitais\n"
-            f"• Monitorar métricas semanais\n\n"
-            f"Pergunte sobre vendas, clientes, marketing ou previsões para análises específicas!",
-            
-            f"🎯 **Assistente COGITARA**: Com base nos dados do seu negócio:\n\n"
-            f"**Status Geral**: Excelente performance com oportunidades de melhoria\n\n"
-            f"🔍 **Áreas de Oportunidade**:\n"
-            f"• Expansão para novo mercado B2B\n"
-            f"• Otimização do custo de aquisição\n"
-            f"• Melhoria no tempo de entrega\n\n"
-            f"💬 **Posso ajudar com**:\n"
-            f"• Análise de vendas detalhada\n"
-            f"• Estratégias de crescimento\n"
-            f"• Previsões e cenários\n"
-            f"• Solução de problemas específicos"
-        ]
-        return random.choice(respostas)
-    
-    def get_historico_conversa(self):
-        """Retorna o histórico da conversa"""
-        return self.historico_conversa
-    
-    def limpar_historico(self):
-        """Limpa o histórico de conversa"""
-        self.historico_conversa = []
+    def clear_failed_attempts(self, ip_address: str):
+        """Clear failed attempts for IP address (successful login)"""
+        if ip_address in self.failed_attempts:
+            del self.failed_attempts[ip
