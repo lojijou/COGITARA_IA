@@ -1,385 +1,338 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
+import os
+import logging
 from datetime import datetime, timedelta
-import warnings
-warnings.filterwarnings('ignore')
+from functools import wraps
+from typing import Dict, Any, List, Optional
+import json
+import hashlib
 
-# Configuração da página
-st.set_page_config(
-    page_title="COGITARA IA - Do Dado à Decisão",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for, flash
+from flask_session import Session
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from .database import DatabaseManager
+from .utils import AdvancedUtils, SecurityManager, CacheManager, DataProcessor
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
 )
 
-# CSS personalizado
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 3rem;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background-color: #F0F2F6;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 4px solid #1E3A8A;
-    }
-    .chat-message {
-        padding: 1rem;
-        border-radius: 10px;
-        margin-bottom: 1rem;
-    }
-    .chat-user {
-        background-color: #E3F2FD;
-        border-left: 4px solid #2196F3;
-    }
-    .chat-assistant {
-        background-color: #F3E5F5;
-        border-left: 4px solid #9C27B0;
-    }
-</style>
-""", unsafe_allow_html=True)
+logger = logging.getLogger(__name__)
 
-# Simulação de banco de dados (sem SQLite para evitar problemas)
-class DatabaseSimulacao:
-    def __init__(self):
-        self.dados_carregados = False
+def create_app():
+    """Factory function to create and configure the Flask application"""
     
-    def carregar_dados_exemplo(self):
-        self.dados_carregados = True
-        return True
+    app = Flask(__name__)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
     
-    def get_metricas_principais(self):
-        return {
-            'total_vendas': 152000,
-            'num_vendas': 48,
-            'total_clientes': 247,
-            'satisfacao_media': 4.3,
-            'investimento_marketing': 52000,
-            'conversoes_marketing': 125
+    # Configuration
+    app.config.update(
+        SECRET_KEY=os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production'),
+        SESSION_TYPE='filesystem',
+        SESSION_PERMANENT=False,
+        SESSION_USE_SIGNER=True,
+        SESSION_KEY_PREFIX='advanced_app_',
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=24),
+        MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 16MB max file upload
+    )
+    
+    # Initialize extensions
+    Session(app)
+    
+    # Initialize custom components
+    db_manager = DatabaseManager()
+    security_manager = SecurityManager()
+    cache_manager = CacheManager()
+    data_processor = DataProcessor()
+    
+    # Store components in app context
+    app.db_manager = db_manager
+    app.security_manager = security_manager
+    app.cache_manager = cache_manager
+    app.data_processor = data_processor
+    
+    def require_auth(f):
+        """Decorator to require authentication"""
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if 'user_id' not in session:
+                flash('Please log in to access this page.', 'warning')
+                return redirect(url_for('login'))
+            return f(*args, **kwargs)
+        return decorated_function
+    
+    def require_role(role: str):
+        """Decorator to require specific role"""
+        def decorator(f):
+            @wraps(f)
+            @require_auth
+            def decorated_function(*args, **kwargs):
+                user_role = session.get('user_role', 'user')
+                if user_role != role and user_role != 'admin':
+                    flash('Insufficient permissions.', 'danger')
+                    return redirect(url_for('dashboard'))
+                return f(*args, **kwargs)
+            return decorated_function
+        return decorator
+    
+    # Routes
+    @app.route('/')
+    def index():
+        """Home page with system overview"""
+        system_stats = cache_manager.get('system_stats')
+        if not system_stats:
+            system_stats = {
+                'total_users': db_manager.get_user_count(),
+                'active_sessions': len(session),
+                'system_uptime': AdvancedUtils.get_system_uptime(),
+                'memory_usage': AdvancedUtils.get_memory_usage(),
+                'cpu_usage': AdvancedUtils.get_cpu_usage()
+            }
+            cache_manager.set('system_stats', system_stats, timeout=300)
+        
+        return render_template('index.html', stats=system_stats)
+    
+    @app.route('/dashboard')
+    @require_auth
+    def dashboard():
+        """User dashboard with personalized data"""
+        user_id = session['user_id']
+        user_data = cache_manager.get(f'user_{user_id}_dashboard')
+        
+        if not user_data:
+            user_data = {
+                'profile': db_manager.get_user_profile(user_id),
+                'recent_activity': db_manager.get_user_activity(user_id, limit=10),
+                'analytics': data_processor.analyze_user_behavior(user_id),
+                'notifications': db_manager.get_user_notifications(user_id)
+            }
+            cache_manager.set(f'user_{user_id}_dashboard', user_data, timeout=60)
+        
+        return render_template('dashboard.html', data=user_data)
+    
+    @app.route('/login', methods=['GET', 'POST'])
+    def login():
+        """Advanced login system with security features"""
+        if request.method == 'POST':
+            username = request.form.get('username')
+            password = request.form.get('password')
+            remember_me = bool(request.form.get('remember_me'))
+            
+            # Security checks
+            if security_manager.is_ip_blocked(request.remote_addr):
+                flash('Too many failed attempts. Please try again later.', 'danger')
+                return render_template('login.html')
+            
+            user = db_manager.authenticate_user(username, password)
+            if user:
+                # Successful login
+                security_manager.clear_failed_attempts(request.remote_addr)
+                
+                session.permanent = remember_me
+                session['user_id'] = user['id']
+                session['username'] = user['username']
+                session['user_role'] = user['role']
+                session['login_time'] = datetime.now().isoformat()
+                
+                # Log login activity
+                db_manager.log_activity(
+                    user['id'], 
+                    'login', 
+                    f'Successful login from {request.remote_addr}'
+                )
+                
+                flash('Login successful!', 'success')
+                return redirect(url_for('dashboard'))
+            else:
+                # Failed login
+                security_manager.record_failed_attempt(request.remote_addr)
+                flash('Invalid credentials. Please try again.', 'danger')
+        
+        return render_template('login.html')
+    
+    @app.route('/register', methods=['GET', 'POST'])
+    def register():
+        """Advanced user registration with validation"""
+        if request.method == 'POST':
+            username = request.form.get('username')
+            email = request.form.get('email')
+            password = request.form.get('password')
+            confirm_password = request.form.get('confirm_password')
+            
+            # Validation
+            errors = []
+            if not security_manager.is_valid_username(username):
+                errors.append('Invalid username format.')
+            if not security_manager.is_valid_email(email):
+                errors.append('Invalid email format.')
+            if not security_manager.is_strong_password(password):
+                errors.append('Password does not meet security requirements.')
+            if password != confirm_password:
+                errors.append('Passwords do not match.')
+            if db_manager.username_exists(username):
+                errors.append('Username already exists.')
+            if db_manager.email_exists(email):
+                errors.append('Email already registered.')
+            
+            if not errors:
+                user_id = db_manager.create_user(username, email, password)
+                if user_id:
+                    flash('Registration successful! Please log in.', 'success')
+                    return redirect(url_for('login'))
+                else:
+                    errors.append('Registration failed. Please try again.')
+            
+            for error in errors:
+                flash(error, 'danger')
+        
+        return render_template('register.html')
+    
+    @app.route('/admin')
+    @require_role('admin')
+    def admin_panel():
+        """Administrative panel with system management"""
+        admin_data = {
+            'users': db_manager.get_all_users(),
+            'system_logs': db_manager.get_system_logs(limit=50),
+            'performance_metrics': AdvancedUtils.get_performance_metrics(),
+            'security_events': security_manager.get_security_events()
         }
+        
+        return render_template('admin.html', data=admin_data)
     
-    def get_vendas_por_produto(self):
-        return pd.DataFrame({
-            'produto': ['Produto A', 'Produto B', 'Produto C'],
-            'total_vendas': [82000, 45000, 25000]
-        })
-    
-    def get_analise_sentimento(self):
-        return pd.DataFrame({
-            'sentimento': ['positivo', 'neutro', 'negativo'],
-            'quantidade': [18, 9, 4],
-            'media_polaridade': [0.72, 0.08, -0.65]
-        })
-
-class IACogitara:
-    def __init__(self):
-        self.historico = []
-    
-    def processar_comando(self, comando):
-        comando_lower = comando.lower()
-        
-        if any(palavra in comando_lower for palavra in ['dashboard', 'painel', 'resumo']):
-            return self.gerar_dashboard()
-        elif any(palavra in comando_lower for palavra in ['venda', 'faturamento']):
-            return self.analisar_vendas()
-        elif any(palavra in comando_lower for palavra in ['cliente', 'satisfação']):
-            return self.analisar_clientes()
-        elif any(palavra in comando_lower for palavra in ['marketing', 'campanha']):
-            return self.analisar_marketing()
-        elif any(palavra in comando_lower for palavra in ['previsão', 'futuro']):
-            return self.gerar_previsao()
-        elif any(palavra in comando_lower for palavra in ['simular', 'cenário']):
-            return self.simular_cenario()
-        elif any(palavra in comando_lower for palavra in ['sentimento', 'feedback']):
-            return self.analisar_sentimento()
-        else:
-            return self.resposta_geral()
-    
-    def gerar_dashboard(self):
-        db = DatabaseSimulacao()
-        metricas = db.get_metricas_principais()
-        
-        resposta = f"""
-🎯 **DASHBOARD COGITARA IA**
-
-📊 **MÉTRICAS PRINCIPAIS:**
-• **Vendas**: R$ {metricas['total_vendas']:,.0f} ({metricas['num_vendas']} vendas)
-• **Clientes**: {metricas['total_clientes']} ativos 
-• **Satisfação**: {metricas['satisfacao_media']}/5.0 ⭐
-• **Marketing**: R$ {metricas['investimento_marketing']:,.0f} investido
-
-🚀 **STATUS**: Performance Excelente (+15% crescimento)
-
-💡 **INSIGHTS:**
-1. Produto A lidera com 54% do faturamento
-2. Clientes recorrentes gastam 3x mais
-3. Oportunidade em expandir campanhas digitais
-"""
-        
-        # Gráficos
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            vendas_produto = db.get_vendas_por_produto()
-            fig = px.bar(vendas_produto, x='produto', y='total_vendas', 
-                        title='📦 Vendas por Produto', color='produto')
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            sentimentos = db.get_analise_sentimento()
-            fig = px.pie(sentimentos, values='quantidade', names='sentimento',
-                        title='😊 Análise de Sentimento')
-            st.plotly_chart(fig, use_container_width=True)
-        
-        return resposta
-    
-    def analisar_vendas(self):
-        db = DatabaseSimulacao()
-        metricas = db.get_metricas_principais()
-        
-        resposta = f"""
-💰 **ANÁLISE DE VENDAS DETALHADA**
-
-📈 **Performance:**
-• Faturamento: R$ {metricas['total_vendas']:,.0f}
-• Crescimento: +15% vs mês anterior
-• Vendas/Mês: {metricas['num_vendas']}
-
-🎯 **Estratégias Recomendadas:**
-• Aumentar estoque do Produto A
-• Criar promoções cruzadas
-• Focar em upsell com clientes existentes
-
-📊 **Previsão Próximos 3 Meses:** +18% de crescimento
-"""
-        
-        # Gráfico de tendência
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun']
-        historico = [100, 120, 140, 152, 165, 180]
-        previsao = [180, 195, 210, 225, 240, 255]
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=meses, y=historico, name='Histórico', line=dict(color='blue')))
-        fig.add_trace(go.Scatter(x=meses, y=previsao, name='Previsão', line=dict(color='red', dash='dash')))
-        fig.update_layout(title='📈 Tendência de Vendas')
-        st.plotly_chart(fig, use_container_width=True)
-        
-        return resposta
-    
-    def analisar_clientes(self):
-        resposta = """
-👥 **ANÁLISE DE CLIENTES**
-
-📊 **Métricas:**
-• Clientes Ativos: 247
-• Satisfação: 4.3/5.0 ⭐
-• Taxa de Retenção: 89%
-• Novos Clientes/Mês: +12
-
-🎯 **Estratégias:**
-• Programa de fidelidade
-• Conteúdo exclusivo
-• Atendimento premium
-"""
-        return resposta
-    
-    def analisar_marketing(self):
-        resposta = """
-📢 **ANÁLISE DE MARKETING**
-
-💰 **Performance:**
-• Investimento: R$ 52.000
-• ROI: 3.4 (Excelente)
-• Custo por Aquisição: R$ 416
-
-🎯 **Canais:**
-1. Email Marketing: ROI 5.9
-2. Google Ads: ROI 4.2  
-3. Redes Sociais: ROI 2.4
-"""
-        return resposta
-    
-    def gerar_previsao(self):
-        resposta = """
-🔮 **PREVISÕES INTELIGENTES**
-
-📈 **Próximos 6 Meses:**
-• Mês 1: +12% crescimento
-• Mês 2: +10% crescimento  
-• Mês 3: +9% crescimento
-• Mês 4: +8% crescimento
-• Mês 5: +7% crescimento
-• Mês 6: +6% crescimento
-
-🎯 **Confiança**: 85%
-"""
-        return resposta
-    
-    def simular_cenario(self):
-        resposta = """
-🎯 **SIMULAÇÃO DE CENÁRIOS**
-
-📊 **Cenário 1: +20% Marketing**
-• Investimento: +R$ 10.400
-• Retorno: +R$ 35.360
-• ROI: 3.4
-• ✅ RECOMENDADO
-
-📊 **Cenário 2: -10% Preço**
-• Volume: +25%
-• Lucro: +R$ 9.200
-• ✅ VIÁVEL
-
-💡 **Experimente o simulador interativo abaixo!**
-"""
-        
-        # Simulador interativo
-        st.subheader("🔄 Simulador Interativo")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            investimento = st.slider("Investimento Extra (R$)", 0, 20000, 5000)
-            variacao_preco = st.slider("Variação Preço (%)", -20, 20, 0)
-        
-        with col2:
-            impacto = variacao_preco * -0.5 + (investimento/5000) * 6
-            novas_vendas = 152000 * (1 + impacto/100)
-            st.metric("Vendas Projetadas", f"R$ {novas_vendas:,.0f}")
-        
-        return resposta
-    
-    def analisar_sentimento(self):
-        resposta = """
-😊 **ANÁLISE DE SENTIMENTO**
-
-📊 **Distribuição:**
-• 😊 Positivo: 18 feedbacks
-• 😐 Neutro: 9 feedbacks  
-• 😡 Negativo: 4 feedbacks
-
-⭐ **Satisfação**: 4.3/5.0
-
-🎯 **Ações:**
-• Implementar chatbot 24/7
-• Programa de fidelidade
-• Pesquisas mensais
-"""
-        return resposta
-    
-    def resposta_geral(self):
-        resposta = """
-🤖 **COGITARA IA - Seu Assistente Inteligente**
-
-Olá! Sou especialista em análise de dados e estratégia de negócios.
-
-🎯 **Posso ajudar com:**
-• 📊 Análise de vendas e métricas
-• 🔮 Previsões inteligentes  
-• 🎯 Simulação de cenários
-• 😊 Análise de sentimentos
-• 💡 Sugestões estratégicas
-
-💬 **Experimente comandos como:**
-"Mostre meu dashboard"
-"Analise minhas vendas" 
-"Faça uma previsão"
-"Simule um cenário"
-
-**Vamos transformar dados em decisões!** 🚀
-"""
-        return resposta
-
-class CogitaraApp:
-    def __init__(self):
-        self.db = DatabaseSimulacao()
-        self.ia = IACogitara()
-        self.db.carregar_dados_exemplo()
-    
-    def pagina_principal(self):
-        st.markdown('<h1 class="main-header">🧠 COGITARA IA</h1>', unsafe_allow_html=True)
-        st.markdown("**Do dado à decisão, com visão e precisão**")
-        
-        # Inicializar chat
-        if 'mensagens' not in st.session_state:
-            st.session_state.mensagens = [{
-                "role": "assistant", 
-                "content": self.ia.resposta_geral()
-            }]
-        
-        # Mostrar histórico
-        for mensagem in st.session_state.mensagens:
-            with st.chat_message(mensagem["role"]):
-                st.markdown(mensagem["content"])
-        
-        # Input do usuário
-        if prompt := st.chat_input("Digite seu comando..."):
-            st.session_state.mensagens.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+    @app.route('/api/v1/analyze', methods=['POST'])
+    @require_auth
+    def analyze_data():
+        """Advanced data analysis endpoint"""
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
             
-            with st.chat_message("assistant"):
-                with st.spinner("🤖 Analisando..."):
-                    resposta = self.ia.processar_comando(prompt)
-                    st.markdown(resposta)
+            analysis_type = data.get('type', 'general')
+            input_data = data.get('data')
             
-            st.session_state.mensagens.append({"role": "assistant", "content": resposta})
+            if analysis_type == 'text':
+                result = data_processor.analyze_text(input_data)
+            elif analysis_type == 'numeric':
+                result = data_processor.analyze_numeric_data(input_data)
+            elif analysis_type == 'pattern':
+                result = data_processor.detect_patterns(input_data)
+            else:
+                result = data_processor.comprehensive_analysis(input_data)
+            
+            # Log analysis activity
+            db_manager.log_activity(
+                session['user_id'],
+                'data_analysis',
+                f'Analysis performed: {analysis_type}'
+            )
+            
+            return jsonify({
+                'success': True,
+                'analysis_type': analysis_type,
+                'result': result,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"Analysis error: {str(e)}")
+            return jsonify({'error': 'Analysis failed'}), 500
+    
+    @app.route('/api/v1/process-file', methods=['POST'])
+    @require_auth
+    def process_file():
+        """File processing endpoint with multiple formats support"""
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
         
-        # Comandos rápidos
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🚀 Comandos Rápidos")
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
         
-        comandos = [
-            "📊 Dashboard Completo",
-            "💰 Análise de Vendas", 
-            "👥 Análise de Clientes",
-            "📢 Análise de Marketing",
-            "🔮 Previsões",
-            "🎯 Simular Cenários",
-            "😊 Análise de Sentimento"
-        ]
+        try:
+            # Process file based on type
+            file_type = file.filename.split('.')[-1].lower()
+            processor = data_processor.get_file_processor(file_type)
+            
+            if not processor:
+                return jsonify({'error': 'Unsupported file type'}), 400
+            
+            result = processor.process(file.stream)
+            
+            # Store processing result
+            db_manager.save_processing_result(
+                session['user_id'],
+                file.filename,
+                file_type,
+                result
+            )
+            
+            return jsonify({
+                'success': True,
+                'filename': file.filename,
+                'file_type': file_type,
+                'result': result
+            })
+            
+        except Exception as e:
+            logger.error(f"File processing error: {str(e)}")
+            return jsonify({'error': 'File processing failed'}), 500
+    
+    @app.route('/logout')
+    def logout():
+        """Logout with session cleanup"""
+        if 'user_id' in session:
+            db_manager.log_activity(
+                session['user_id'],
+                'logout',
+                'User logged out'
+            )
         
-        for comando in comandos:
-            if st.sidebar.button(comando):
-                texto_comando = comando.split(' ', 1)[1]
-                st.session_state.mensagens.append({"role": "user", "content": texto_comando})
-                with st.chat_message("user"):
-                    st.markdown(texto_comando)
-                
-                with st.chat_message("assistant"):
-                    with st.spinner("🤖 Processando..."):
-                        resposta = self.ia.processar_comando(texto_comando)
-                        st.markdown(resposta)
-                
-                st.session_state.mensagens.append({"role": "assistant", "content": resposta})
-                st.rerun()
+        session.clear()
+        flash('You have been logged out successfully.', 'info')
+        return redirect(url_for('index'))
+    
+    # Error handlers
+    @app.errorhandler(404)
+    def not_found_error(error):
+        return render_template('404.html'), 404
+    
+    @app.errorhandler(500)
+    def internal_error(error):
+        logger.error(f"Server Error: {error}")
+        return render_template('500.html'), 500
+    
+    @app.errorhandler(403)
+    def forbidden_error(error):
+        return render_template('403.html'), 403
+    
+    # Context processors
+    @app.context_processor
+    def utility_processor():
+        def format_datetime(value, format='medium'):
+            if format == 'full':
+                format = "%Y-%m-%d %H:%M:%S"
+            elif format == 'medium':
+                format = "%Y-%m-%d %H:%M"
+            else:
+                format = "%Y-%m-%d"
+            return value.strftime(format)
         
-        if st.sidebar.button("🗑️ Limpar Conversa"):
-            st.session_state.mensagens = [{
-                "role": "assistant", 
-                "content": "Conversa reiniciada! Como posso ajudar? 🚀"
-            }]
-            st.rerun()
-
-    def run(self):
-        st.sidebar.title("🎛️ COGITARA IA")
-        st.sidebar.markdown("---")
-        self.pagina_principal()
-        st.sidebar.markdown("---")
-        st.sidebar.info("""
-        **🧠 COGITARA IA**
-        - Análise Preditiva
-        - Simulação de Cenários  
-        - Análise de Sentimento
-        - Dashboard Inteligente
-        """)
-
-if __name__ == "__main__":
-    app = CogitaraApp()
-    app.run()
+        def get_current_year():
+            return datetime.now().year
+        
+        return dict(
+            format_datetime=format_datetime,
+            current_year=get_current_year
+        )
+    
+    logger.info("Application initialized successfully")
+    return app
