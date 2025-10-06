@@ -4,15 +4,11 @@ from datetime import datetime, timedelta
 from functools import wraps
 from typing import Dict, Any, List, Optional
 import json
-import hashlib
 
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for, flash
 from flask_session import Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
-
-from .database import DatabaseManager
-from .utils import AdvancedUtils, SecurityManager, CacheManager, DataProcessor
 
 # Configure logging
 logging.basicConfig(
@@ -40,23 +36,21 @@ def create_app():
         SESSION_USE_SIGNER=True,
         SESSION_KEY_PREFIX='advanced_app_',
         PERMANENT_SESSION_LIFETIME=timedelta(hours=24),
-        MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 16MB max file upload
+        MAX_CONTENT_LENGTH=16 * 1024 * 1024,
     )
     
     # Initialize extensions
     Session(app)
+    
+    # Import components here to avoid circular imports
+    from .database import DatabaseManager
+    from .utils import SecurityManager, CacheManager, DataProcessor, AdvancedUtils
     
     # Initialize custom components
     db_manager = DatabaseManager()
     security_manager = SecurityManager()
     cache_manager = CacheManager()
     data_processor = DataProcessor()
-    
-    # Store components in app context
-    app.db_manager = db_manager
-    app.security_manager = security_manager
-    app.cache_manager = cache_manager
-    app.data_processor = data_processor
     
     def require_auth(f):
         """Decorator to require authentication"""
@@ -87,7 +81,11 @@ def create_app():
     def utility_processor():
         def format_datetime(value, format='medium'):
             if isinstance(value, str):
-                value = datetime.fromisoformat(value)
+                try:
+                    value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                except:
+                    return value
+                    
             if format == 'full':
                 format_str = "%Y-%m-%d %H:%M:%S"
             elif format == 'medium':
@@ -122,17 +120,14 @@ def create_app():
     @app.route('/')
     def index():
         """Home page with system overview"""
-        system_stats = cache_manager.get('system_stats')
-        if not system_stats:
-            system_stats = {
-                'total_users': db_manager.get_user_count(),
-                'active_sessions': 0,  # Simplified for now
-                'system_uptime': AdvancedUtils.get_system_uptime(),
-                'memory_usage': AdvancedUtils.get_memory_usage(),
-                'cpu_usage': AdvancedUtils.get_cpu_usage(),
-                'timestamp': datetime.now().isoformat()
-            }
-            cache_manager.set('system_stats', system_stats, timeout=300)
+        system_stats = {
+            'total_users': db_manager.get_user_count(),
+            'active_sessions': 0,
+            'system_uptime': AdvancedUtils.get_system_uptime(),
+            'memory_usage': AdvancedUtils.get_memory_usage(),
+            'cpu_usage': AdvancedUtils.get_cpu_usage(),
+            'timestamp': datetime.now().isoformat()
+        }
         
         return render_template('index.html', stats=system_stats)
     
@@ -141,16 +136,13 @@ def create_app():
     def dashboard():
         """User dashboard with personalized data"""
         user_id = session['user_id']
-        user_data = cache_manager.get(f'user_{user_id}_dashboard')
         
-        if not user_data:
-            user_data = {
-                'profile': db_manager.get_user_profile(user_id),
-                'recent_activity': db_manager.get_user_activity(user_id, limit=10),
-                'analytics': data_processor.analyze_user_behavior(user_id),
-                'notifications': db_manager.get_user_notifications(user_id)
-            }
-            cache_manager.set(f'user_{user_id}_dashboard', user_data, timeout=60)
+        user_data = {
+            'profile': db_manager.get_user_profile(user_id),
+            'recent_activity': db_manager.get_user_activity(user_id, limit=10),
+            'analytics': data_processor.analyze_user_behavior(user_id),
+            'notifications': db_manager.get_user_notifications(user_id)
+        }
         
         return render_template('dashboard.html', data=user_data)
     
@@ -206,11 +198,11 @@ def create_app():
             # Validation
             errors = []
             if not security_manager.is_valid_username(username):
-                errors.append('Invalid username format.')
+                errors.append('Username must be 3-50 characters and contain only letters, numbers, and ._-')
             if not security_manager.is_valid_email(email):
                 errors.append('Invalid email format.')
             if not security_manager.is_strong_password(password):
-                errors.append('Password does not meet security requirements.')
+                errors.append('Password must be at least 8 characters with uppercase, lowercase, number and special character.')
             if password != confirm_password:
                 errors.append('Passwords do not match.')
             if db_manager.username_exists(username):
@@ -286,7 +278,7 @@ def create_app():
     @app.route('/api/v1/process-file', methods=['POST'])
     @require_auth
     def process_file():
-        """File processing endpoint with multiple formats support"""
+        """File processing endpoint"""
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
         
@@ -295,28 +287,24 @@ def create_app():
             return jsonify({'error': 'No file selected'}), 400
         
         try:
-            # Process file based on type
-            file_type = file.filename.split('.')[-1].lower()
-            processor = data_processor.get_file_processor(file_type)
+            # Simple text file processing
+            content = file.stream.read().decode('utf-8')
             
-            if not processor:
-                return jsonify({'error': 'Unsupported file type'}), 400
-            
-            result = processor.process(file.stream)
+            result = data_processor.analyze_text(content)
             
             # Store processing result
             db_manager.save_processing_result(
                 session['user_id'],
                 file.filename,
-                file_type,
-                result
+                'txt',
+                result.data
             )
             
             return jsonify({
                 'success': True,
                 'filename': file.filename,
-                'file_type': file_type,
-                'result': result
+                'file_type': 'txt',
+                'result': result.data
             })
             
         except Exception as e:
@@ -329,6 +317,12 @@ def create_app():
         """User profile management"""
         user_profile = db_manager.get_user_profile(session['user_id'])
         return render_template('profile.html', profile=user_profile)
+    
+    @app.route('/analytics')
+    @require_auth
+    def analytics():
+        """Advanced analytics dashboard"""
+        return render_template('analytics.html')
     
     @app.route('/logout')
     def logout():
@@ -344,7 +338,17 @@ def create_app():
         flash('You have been logged out successfully.', 'info')
         return redirect(url_for('index'))
     
-    logger.info("Application initialized successfully")
+    # API Health Check
+    @app.route('/health')
+    def health_check():
+        """Health check endpoint"""
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'version': '2.0.0'
+        })
+    
+    logger.info("Cogitara IA Application initialized successfully")
     return app
 
 # For direct execution
