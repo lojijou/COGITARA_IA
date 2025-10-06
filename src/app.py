@@ -81,7 +81,43 @@ def create_app():
                 return f(*args, **kwargs)
             return decorated_function
         return decorator
+
+    # Template context processors
+    @app.context_processor
+    def utility_processor():
+        def format_datetime(value, format='medium'):
+            if isinstance(value, str):
+                value = datetime.fromisoformat(value)
+            if format == 'full':
+                format_str = "%Y-%m-%d %H:%M:%S"
+            elif format == 'medium':
+                format_str = "%Y-%m-%d %H:%M"
+            else:
+                format_str = "%Y-%m-%d"
+            return value.strftime(format_str)
+        
+        def get_current_year():
+            return datetime.now().year
+        
+        return dict(
+            format_datetime=format_datetime,
+            current_year=get_current_year
+        )
+
+    # Error handlers
+    @app.errorhandler(404)
+    def not_found_error(error):
+        return render_template('404.html'), 404
     
+    @app.errorhandler(500)
+    def internal_error(error):
+        logger.error(f"Server Error: {error}")
+        return render_template('500.html'), 500
+    
+    @app.errorhandler(403)
+    def forbidden_error(error):
+        return render_template('403.html'), 403
+
     # Routes
     @app.route('/')
     def index():
@@ -90,10 +126,11 @@ def create_app():
         if not system_stats:
             system_stats = {
                 'total_users': db_manager.get_user_count(),
-                'active_sessions': len(session),
+                'active_sessions': 0,  # Simplified for now
                 'system_uptime': AdvancedUtils.get_system_uptime(),
                 'memory_usage': AdvancedUtils.get_memory_usage(),
-                'cpu_usage': AdvancedUtils.get_cpu_usage()
+                'cpu_usage': AdvancedUtils.get_cpu_usage(),
+                'timestamp': datetime.now().isoformat()
             }
             cache_manager.set('system_stats', system_stats, timeout=300)
         
@@ -286,6 +323,13 @@ def create_app():
             logger.error(f"File processing error: {str(e)}")
             return jsonify({'error': 'File processing failed'}), 500
     
+    @app.route('/profile')
+    @require_auth
+    def profile():
+        """User profile management"""
+        user_profile = db_manager.get_user_profile(session['user_id'])
+        return render_template('profile.html', profile=user_profile)
+    
     @app.route('/logout')
     def logout():
         """Logout with session cleanup"""
@@ -300,39 +344,10 @@ def create_app():
         flash('You have been logged out successfully.', 'info')
         return redirect(url_for('index'))
     
-    # Error handlers
-    @app.errorhandler(404)
-    def not_found_error(error):
-        return render_template('404.html'), 404
-    
-    @app.errorhandler(500)
-    def internal_error(error):
-        logger.error(f"Server Error: {error}")
-        return render_template('500.html'), 500
-    
-    @app.errorhandler(403)
-    def forbidden_error(error):
-        return render_template('403.html'), 403
-    
-    # Context processors
-    @app.context_processor
-    def utility_processor():
-        def format_datetime(value, format='medium'):
-            if format == 'full':
-                format = "%Y-%m-%d %H:%M:%S"
-            elif format == 'medium':
-                format = "%Y-%m-%d %H:%M"
-            else:
-                format = "%Y-%m-%d"
-            return value.strftime(format)
-        
-        def get_current_year():
-            return datetime.now().year
-        
-        return dict(
-            format_datetime=format_datetime,
-            current_year=get_current_year
-        )
-    
     logger.info("Application initialized successfully")
     return app
+
+# For direct execution
+if __name__ == '__main__':
+    app = create_app()
+    app.run(debug=True, host='0.0.0.0', port=5000)
