@@ -1,17 +1,15 @@
-import os
 import sqlite3
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 import json
-import hashlib
-from contextlib import contextmanager
 import threading
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Advanced database management with connection pooling and transactions"""
+    """Advanced database management with connection pooling"""
     
     def __init__(self, db_path: str = "app_database.db"):
         self.db_path = db_path
@@ -55,19 +53,6 @@ class DatabaseManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_login TIMESTAMP,
                 profile_data TEXT
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                session_token VARCHAR(255) UNIQUE,
-                ip_address VARCHAR(45),
-                user_agent TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1,
-                FOREIGN KEY (user_id) REFERENCES users (id)
             )
             """,
             """
@@ -117,18 +102,6 @@ class DatabaseManager:
                 expires_at TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS security_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_type VARCHAR(50),
-                ip_address VARCHAR(45),
-                user_id INTEGER,
-                description TEXT,
-                severity VARCHAR(20),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
             """
         ]
         
@@ -136,9 +109,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
             "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
             "CREATE INDEX IF NOT EXISTS idx_activity_user_time ON activity_logs(user_id, created_at)",
-            "CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token)",
-            "CREATE INDEX IF NOT EXISTS idx_notifications_user ON user_notifications(user_id, is_read)",
-            "CREATE INDEX IF NOT EXISTS idx_security_ip ON security_events(ip_address, created_at)"
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user ON user_notifications(user_id, is_read)"
         ]
         
         with self.transaction() as conn:
@@ -146,6 +117,17 @@ class DatabaseManager:
                 conn.execute(table_sql)
             for index_sql in indexes:
                 conn.execute(index_sql)
+            
+            # Create default admin user if not exists
+            from werkzeug.security import generate_password_hash
+            admin_hash = generate_password_hash('admin123')
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)",
+                    ('admin', 'admin@cogitara.com', admin_hash, 'admin')
+                )
+            except:
+                pass
     
     def create_user(self, username: str, email: str, password: str) -> Optional[int]:
         """Create a new user with hashed password"""
@@ -153,7 +135,7 @@ class DatabaseManager:
         
         password_hash = generate_password_hash(password)
         profile_data = json.dumps({
-            'registration_ip': '127.0.0.1',  # Would be actual IP in production
+            'registration_ip': '127.0.0.1',
             'preferences': {},
             'statistics': {'logins': 0, 'files_processed': 0}
         })
@@ -232,7 +214,10 @@ class DatabaseManager:
             
             if user:
                 profile = dict(user)
-                profile['profile_data'] = json.loads(user['profile_data'])
+                try:
+                    profile['profile_data'] = json.loads(user['profile_data'])
+                except:
+                    profile['profile_data'] = {}
                 return profile
             return {}
     
@@ -325,63 +310,3 @@ class DatabaseManager:
                 (user_id, title, message, notification_type, expires_at)
                 VALUES (?, ?, ?, ?, ?)
             """, (user_id, title, message, notification_type, expires_at))
-    
-    def log_security_event(self, event_type: str, ip_address: str, 
-                          user_id: int = None, description: str = "", 
-                          severity: str = "medium"):
-        """Log security-related events"""
-        with self.transaction() as conn:
-            conn.execute("""
-                INSERT INTO security_events 
-                (event_type, ip_address, user_id, description, severity)
-                VALUES (?, ?, ?, ?, ?)
-            """, (event_type, ip_address, user_id, description, severity))
-    
-    def cleanup_old_data(self, days: int = 30):
-        """Clean up old data to maintain database performance"""
-        cutoff_date = datetime.now() - timedelta(days=days)
-        
-        with self.transaction() as conn:
-            # Clean old activity logs
-            conn.execute(
-                "DELETE FROM activity_logs WHERE created_at < ?",
-                (cutoff_date,)
-            )
-            # Clean old sessions
-            conn.execute(
-                "DELETE FROM user_sessions WHERE expires_at < ?",
-                (datetime.now(),)
-            )
-            # Clean old notifications
-            conn.execute(
-                "DELETE FROM user_notifications WHERE expires_at < ?",
-                (datetime.now(),)
-            )
-            # Clean old security events (keep longer)
-            security_cutoff = datetime.now() - timedelta(days=90)
-            conn.execute(
-                "DELETE FROM security_events WHERE created_at < ? AND severity != 'high'",
-                (security_cutoff,)
-            )
-    
-    def get_database_stats(self) -> Dict[str, Any]:
-        """Get database statistics"""
-        with self.transaction() as conn:
-            stats = {}
-            
-            # Table counts
-            tables = ['users', 'activity_logs', 'processing_results', 
-                     'user_notifications', 'security_events']
-            
-            for table in tables:
-                result = conn.execute(f"SELECT COUNT(*) as count FROM {table}").fetchone()
-                stats[f'{table}_count'] = result['count']
-            
-            # Database size
-            result = conn.execute("""
-                SELECT page_count * page_size as size 
-                FROM pragma_page_count(), pragma_page_size()
-            """).fetchone()
-            stats['database_size_bytes'] = result['size'] if result else 0
-            
-            return stats
